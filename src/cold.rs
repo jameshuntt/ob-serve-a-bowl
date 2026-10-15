@@ -16,14 +16,13 @@
 //! [`PayloadRef`], or the optional tagged-payload feature to
 //! build the state event before publishing.
 
-use big_bad_bool::PackedWord;
 use big_bad_bool_interact::FieldMatcher;
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
-use crate::sync::atomic::{AtomicU64, Ordering};
+use crate::cells::ObserverCells;
 
 use crate::{
-    ObservableFieldMask, ObservablePacket, ObservableWakeRuntime, ObserverId, ObserverState, PayloadRef, TargetTaskId,
+    ObservableFieldMask, ObservablePacket, ObservableWakeRuntime, ObserverHandle, ObserverId, PayloadRef, TargetTaskId,
     WakeError, WakeEvent, WakeKey64, WakeProfileCode,
 };
 
@@ -184,27 +183,10 @@ impl<S> ColdObserverConfig<S> {
     }
 }
 
-#[repr(align(64))]
-struct ColdAtomicU64(AtomicU64);
-
-impl ColdAtomicU64 {
-    #[cfg(not(loom))]
-    const fn new(value: u64) -> Self {
-        Self(AtomicU64::new(value))
-    }
-    #[cfg(loom)]
-    fn new(value: u64) -> Self {
-        Self(AtomicU64::new(value))
-    }
-}
-
 struct ColdObserverEntry<S> {
     generation: u32,
     config: ColdObserverConfig<S>,
-    state: ColdAtomicU64,
-    wake_epoch: ColdAtomicU64,
-    delivery_epoch: ColdAtomicU64,
-    last_key: ColdAtomicU64,
+    cells: crate::sync::Arc<ObserverCells>,
     last_predicate_true: bool,
 }
 
@@ -212,11 +194,8 @@ impl<S> ColdObserverEntry<S> {
     fn new(generation: u32, config: ColdObserverConfig<S>) -> Self {
         Self {
             generation,
+            cells: ObserverCells::new(config.active),
             config,
-            state: ColdAtomicU64::new(ObserverState::Active as u64),
-            wake_epoch: ColdAtomicU64::new(0),
-            delivery_epoch: ColdAtomicU64::new(0),
-            last_key: ColdAtomicU64::new(0),
             last_predicate_true: false,
         }
     }
@@ -298,6 +277,16 @@ pub struct ColdObservableRuntime<S: ObservableState> {
     condition_ready: VecDeque<WakeEvent>,
 }
 
+/// Handles outlive the runtime; dropping it marks every cold observer it still holds as removed
+/// (its hot runtime does the same for hot observers).
+impl<S: ObservableState> Drop for ColdObservableRuntime<S> {
+    fn drop(&mut self) {
+        for entry in self.cold_observers.iter().flatten() {
+            entry.cells.mark_removed();
+        }
+    }
+}
+
 impl<S: ObservableState> ColdObservableRuntime<S> {
     #[must_use]
     pub fn new(state: S) -> Self {
@@ -370,7 +359,7 @@ impl<S: ObservableState> ColdObservableRuntime<S> {
             return Err(WakeError::StaleObserver(id));
         }
 
-        entry.state.0.store(ObserverState::Removed as u64, Ordering::Release);
+        entry.cells.mark_removed();
         self.generations[id.slot as usize] = entry.generation.wrapping_add(1);
         *slot = None;
         self.free.push(id.slot);
@@ -379,22 +368,21 @@ impl<S: ObservableState> ColdObservableRuntime<S> {
     }
 
     pub fn cold_observer_epoch(&self, id: ObserverId) -> Result<u64, WakeError> {
-        let entry = self.get_cold_entry(id)?;
-        Ok(entry.wake_epoch.0.load(Ordering::Acquire))
+        Ok(self.get_cold_entry(id)?.cells.wake_epoch())
     }
 
     pub fn cold_observer_delivery_epoch(&self, id: ObserverId) -> Result<u64, WakeError> {
-        let entry = self.get_cold_entry(id)?;
-        Ok(entry.delivery_epoch.0.load(Ordering::Acquire))
+        Ok(self.get_cold_entry(id)?.cells.delivery_epoch())
     }
 
     pub fn cold_observer_last_key(&self, id: ObserverId) -> Result<Option<WakeKey64>, WakeError> {
-        let entry = self.get_cold_entry(id)?;
-        let raw = entry.last_key.0.load(Ordering::Acquire);
-        if raw == 0 {
-            return Ok(None);
-        }
-        Ok(WakeKey64::try_from_raw_u128(u128::from(raw)))
+        Ok(self.get_cold_entry(id)?.cells.last_key())
+    }
+
+    /// A handle that reads this cold observer's wakes from any thread while the runtime keeps
+    /// publishing. See [`ObserverHandle`].
+    pub fn cold_observer_handle(&self, id: ObserverId) -> Result<ObserverHandle, WakeError> {
+        Ok(ObserverHandle::new(id, &self.get_cold_entry(id)?.cells))
     }
 
     #[must_use]
@@ -539,14 +527,6 @@ impl<S: ObservableState> ColdObservableRuntime<S> {
                     continue;
                 };
 
-                // `publish_stateful` has `&mut self`, so this load is only a cheap
-                // state gate for slots that may have been removed/reused. Acquire is
-                // unnecessary in this single-runtime mutation path; release/acquire
-                // accessors remain available for external epoch readers.
-                if entry.state.0.load(Ordering::Relaxed) != ObserverState::Active as u64 {
-                    continue;
-                }
-
                 if !entry.config.key_matches(packet.key) {
                     continue;
                 }
@@ -621,10 +601,6 @@ impl<S: ObservableState> ColdObservableRuntime<S> {
                 };
 
                 if entry.generation != id.generation {
-                    continue;
-                }
-
-                if entry.state.0.load(Ordering::Relaxed) != ObserverState::Active as u64 {
                     continue;
                 }
 
@@ -715,12 +691,11 @@ fn make_cold_delivery<S>(
     let reason = packet.key.reason_code()?;
     let profile = entry.config.profile;
 
-    entry.last_key.0.store(packet.key.raw_storage(), Ordering::Release);
-    let epoch = entry.wake_epoch.0.fetch_add(1, Ordering::AcqRel) + 1;
+    let epoch = entry.cells.publish_wake(packet.key);
 
     match profile {
         WakeProfileCode::InlineQueue => {
-            entry.delivery_epoch.0.fetch_add(1, Ordering::AcqRel);
+            entry.cells.bump_delivery();
             Ok(ColdDelivery::Inline(WakeEvent {
                 observer_id: entry.id(slot),
                 target: entry.config.target,
@@ -732,11 +707,11 @@ fn make_cold_delivery<S>(
             }))
         }
         WakeProfileCode::AtomicEpoch => {
-            entry.delivery_epoch.0.fetch_add(1, Ordering::AcqRel);
+            entry.cells.bump_delivery();
             Ok(ColdDelivery::Atomic)
         }
         WakeProfileCode::ConditionCache => {
-            entry.delivery_epoch.0.fetch_add(1, Ordering::AcqRel);
+            entry.cells.bump_delivery();
             Ok(ColdDelivery::Condition(WakeEvent {
                 observer_id: entry.id(slot),
                 target: entry.config.target,
@@ -748,7 +723,7 @@ fn make_cold_delivery<S>(
             }))
         }
         WakeProfileCode::Manual => {
-            entry.delivery_epoch.0.fetch_add(1, Ordering::AcqRel);
+            entry.cells.bump_delivery();
             Ok(ColdDelivery::Manual)
         }
         WakeProfileCode::CrossbeamQueue => Ok(ColdDelivery::Error(

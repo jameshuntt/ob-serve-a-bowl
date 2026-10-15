@@ -1,66 +1,64 @@
 #![cfg(loom)]
 #![cfg(feature = "loom-tests")]
 
-use loom::sync::atomic::{AtomicU64, Ordering};
-use loom::sync::Arc;
+//! The whole runtime on one loom thread, an `ObserverHandle` on another: every interleaving and
+//! weak-memory reordering of a real publish against a real handle read.
+
 use loom::thread;
+use ob_serve_a_bowl::{
+    ObservablePacket, ObservableWakeRuntime, ObserverConfig, ObserverState, PayloadRef, WakeKey64, WakeProfileCode,
+    WakeReasonCode,
+};
 
-const KEY: u64 = 0xfeed_beef_cafe_babe;
+fn key(n: u16) -> WakeKey64 {
+    WakeKey64::typed(WakeReasonCode::Manual, WakeProfileCode::AtomicEpoch, 0, 0b1_u16, 0, n).unwrap()
+}
 
 #[test]
-fn wake_epoch_publish_order_makes_key_visible_after_epoch() {
+fn a_handle_reads_a_publish_on_another_thread() {
     loom::model(|| {
-        let last_key = Arc::new(AtomicU64::new(0));
-        let wake_epoch = Arc::new(AtomicU64::new(0));
-
-        let writer_key = Arc::clone(&last_key);
-        let writer_epoch = Arc::clone(&wake_epoch);
-        let writer = thread::spawn(move || {
-            // This mirrors the runtime's publication order:
-            // key first, then epoch. Readers treat the epoch as the signal.
-            writer_key.store(KEY, Ordering::Release);
-            writer_epoch.fetch_add(1, Ordering::AcqRel);
-        });
+        let mut runtime = ObservableWakeRuntime::new();
+        let id = runtime.register(ObserverConfig::new("reader", WakeProfileCode::AtomicEpoch));
+        let handle = runtime.observer_handle(id).unwrap();
 
         let reader = thread::spawn(move || {
-            let observed_epoch = wake_epoch.load(Ordering::Acquire);
-            if observed_epoch > 0 {
-                assert_eq!(last_key.load(Ordering::Acquire), KEY);
-            }
+            let seen = handle.observe();
+            let delivered = handle.delivery_epoch();
+            (seen, delivered)
         });
 
-        writer.join().unwrap();
-        reader.join().unwrap();
+        let report = runtime.publish(ObservablePacket::new(key(7), PayloadRef::default()));
+        assert_eq!(report.atomic_delivered, 1);
+
+        let (seen, delivered) = reader.join().unwrap();
+        match seen.epoch {
+            0 => assert_eq!(seen.key, None),
+            1 => assert_eq!(seen.key, Some(key(7))),
+            n => panic!("epoch {n} after one publish"),
+        }
+        assert!(delivered <= 1);
+        assert_eq!(runtime.observer_epoch(id).unwrap(), 1);
     });
 }
 
 #[test]
-fn delivery_epoch_can_lag_wake_epoch_without_losing_wake_cause() {
+fn an_old_handle_never_sees_the_observer_that_reuses_its_slot() {
     loom::model(|| {
-        let last_key = Arc::new(AtomicU64::new(0));
-        let wake_epoch = Arc::new(AtomicU64::new(0));
-        let delivery_epoch = Arc::new(AtomicU64::new(0));
+        let mut runtime = ObservableWakeRuntime::new();
+        let old = runtime.register(ObserverConfig::new("old", WakeProfileCode::AtomicEpoch));
+        let handle = runtime.observer_handle(old).unwrap();
 
-        let writer_key = Arc::clone(&last_key);
-        let writer_wake = Arc::clone(&wake_epoch);
-        let writer_delivery = Arc::clone(&delivery_epoch);
-        let writer = thread::spawn(move || {
-            writer_key.store(KEY, Ordering::Release);
-            writer_wake.fetch_add(1, Ordering::AcqRel);
-            // Delivery may happen later than the semantic wake. That is okay;
-            // the key remains the authority for the observed wake epoch.
-            writer_delivery.fetch_add(1, Ordering::AcqRel);
-        });
+        let reader = thread::spawn(move || (handle.state(), handle.observe()));
 
-        let reader = thread::spawn(move || {
-            let observed_wake = wake_epoch.load(Ordering::Acquire);
-            let _observed_delivery = delivery_epoch.load(Ordering::Acquire);
-            if observed_wake > 0 {
-                assert_eq!(last_key.load(Ordering::Acquire), KEY);
-            }
-        });
+        runtime.remove(old).unwrap();
+        let new = runtime.register(ObserverConfig::new("new", WakeProfileCode::AtomicEpoch));
+        assert_eq!(new.slot, old.slot);
+        runtime.publish(ObservablePacket::new(key(1), PayloadRef::default()));
 
-        writer.join().unwrap();
-        reader.join().unwrap();
+        let (state, seen) = reader.join().unwrap();
+        assert!(matches!(state, ObserverState::Active | ObserverState::Removed));
+        assert_eq!(seen.epoch, 0, "the old handle saw the new observer's wake");
+        assert_eq!(runtime.observer_epoch(new).unwrap(), 1);
     });
 }
+

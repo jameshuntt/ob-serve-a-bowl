@@ -9,12 +9,14 @@
 //! Crossbeam is intentionally a feature-gated wake profile (`crossbeam-wake`),
 //! not the identity of the protocol. The protocol stays backend-agnostic.
 
-use big_bad_bool::{bitpack, BitpackError, PackedWord};
+use big_bad_bool::{bitpack, BitpackError};
 use big_bad_bool_interact::FieldMatcher;
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 mod sync;
-use crate::sync::atomic::{AtomicU64, Ordering};
+mod cells;
+pub use cells::{ObservedWake, ObserverHandle};
+use cells::ObserverCells;
 
 pub mod config;
 pub use config::{DispatchPolicy, ObservableRuntimeConfig, ObservableWakeRuntimeBuilder};
@@ -535,39 +537,18 @@ impl ObserverConfig {
     }
 }
 
-#[repr(align(64))]
-struct CacheLineAtomicU64(AtomicU64);
-
-impl CacheLineAtomicU64 {
-    // loom's atomics are not const-constructible; the std path stays const.
-    #[cfg(not(loom))]
-    const fn new(value: u64) -> Self {
-        Self(AtomicU64::new(value))
-    }
-    #[cfg(loom)]
-    fn new(value: u64) -> Self {
-        Self(AtomicU64::new(value))
-    }
-}
-
 struct ObserverEntry {
     generation: u32,
     config: ObserverConfig,
-    state: CacheLineAtomicU64,
-    wake_epoch: CacheLineAtomicU64,
-    delivery_epoch: CacheLineAtomicU64,
-    last_key: CacheLineAtomicU64,
+    cells: crate::sync::Arc<ObserverCells>,
 }
 
 impl ObserverEntry {
     fn new(generation: u32, config: ObserverConfig) -> Self {
         Self {
             generation,
+            cells: ObserverCells::new(config.active),
             config,
-            state: CacheLineAtomicU64::new(ObserverState::Active as u64),
-            wake_epoch: CacheLineAtomicU64::new(0),
-            delivery_epoch: CacheLineAtomicU64::new(0),
-            last_key: CacheLineAtomicU64::new(0),
         }
     }
 
@@ -754,6 +735,15 @@ pub struct ObservableWakeRuntime {
     crossbeam_sender: Option<Sender<WakeEvent>>,
 }
 
+/// Handles outlive the runtime; dropping it marks every observer it still holds as removed.
+impl Drop for ObservableWakeRuntime {
+    fn drop(&mut self) {
+        for entry in self.observers.iter().flatten() {
+            entry.cells.mark_removed();
+        }
+    }
+}
+
 impl Default for ObservableWakeRuntime {
     fn default() -> Self {
         Self::new()
@@ -846,7 +836,7 @@ impl ObservableWakeRuntime {
             return Err(WakeError::StaleObserver(id));
         }
 
-        entry.state.0.store(ObserverState::Removed as u64, Ordering::Release);
+        entry.cells.mark_removed();
         self.generations[id.slot as usize] = entry.generation.wrapping_add(1);
         *slot = None;
         self.free.push(id.slot);
@@ -855,22 +845,21 @@ impl ObservableWakeRuntime {
     }
 
     pub fn observer_epoch(&self, id: ObserverId) -> Result<u64, WakeError> {
-        let entry = self.get_entry(id)?;
-        Ok(entry.wake_epoch.0.load(Ordering::Acquire))
+        Ok(self.get_entry(id)?.cells.wake_epoch())
     }
 
     pub fn observer_delivery_epoch(&self, id: ObserverId) -> Result<u64, WakeError> {
-        let entry = self.get_entry(id)?;
-        Ok(entry.delivery_epoch.0.load(Ordering::Acquire))
+        Ok(self.get_entry(id)?.cells.delivery_epoch())
     }
 
     pub fn observer_last_key(&self, id: ObserverId) -> Result<Option<WakeKey64>, WakeError> {
-        let entry = self.get_entry(id)?;
-        let raw = entry.last_key.0.load(Ordering::Acquire);
-        if raw == 0 {
-            return Ok(None);
-        }
-        Ok(WakeKey64::try_from_raw_u128(u128::from(raw)))
+        Ok(self.get_entry(id)?.cells.last_key())
+    }
+
+    /// A handle that reads this observer's wakes from any thread while the runtime keeps
+    /// publishing. See [`ObserverHandle`].
+    pub fn observer_handle(&self, id: ObserverId) -> Result<ObserverHandle, WakeError> {
+        Ok(ObserverHandle::new(id, &self.get_entry(id)?.cells))
     }
 
     pub fn publish(&mut self, packet: ObservablePacket) -> WakeReport {
@@ -883,9 +872,6 @@ impl ObservableWakeRuntime {
                 continue;
             };
 
-            if entry.state.0.load(Ordering::Acquire) != ObserverState::Active as u64 {
-                continue;
-            }
 
             if !entry.config.matches(packet.key) {
                 continue;
@@ -940,9 +926,6 @@ impl ObservableWakeRuntime {
                     continue;
                 }
 
-                if entry.state.0.load(Ordering::Acquire) != ObserverState::Active as u64 {
-                    continue;
-                }
 
                 if !entry.config.matches(packet.key) {
                     continue;
@@ -1066,14 +1049,7 @@ impl ObservableWakeRuntime {
     ) -> Result<WakeEvent, WakeError> {
         let reason = packet.key.reason_code()?;
         let profile = entry.config.profile;
-        // Publish the key before the epoch bump. External readers that observe
-        // the new epoch with an Acquire load can then safely load the recorded
-        // key as the wake cause for that epoch.
-        entry
-            .last_key
-            .0
-            .store(packet.key.raw_storage(), Ordering::Release);
-        let epoch = entry.wake_epoch.0.fetch_add(1, Ordering::AcqRel) + 1;
+        let epoch = entry.cells.publish_wake(packet.key);
 
         Ok(WakeEvent {
             observer_id: entry.id(slot),
@@ -1111,19 +1087,21 @@ impl ObservableWakeRuntime {
     }
 
     fn bump_delivery_epoch(&self, id: ObserverId) -> Result<u64, WakeError> {
-        let entry = self.get_entry(id)?;
-        Ok(entry.delivery_epoch.0.fetch_add(1, Ordering::AcqRel) + 1)
+        Ok(self.get_entry(id)?.cells.bump_delivery())
     }
 
     #[cfg(feature = "crossbeam-wake")]
     fn deliver_crossbeam(&mut self, event: WakeEvent) -> Result<DeliveryKind, WakeError> {
-        self.bump_delivery_epoch(event.observer_id)?;
+        let id = event.observer_id;
         let Some(sender) = &self.crossbeam_sender else {
             return Err(WakeError::CrossbeamSenderMissing);
         };
         sender
             .send(event)
             .map_err(|_| WakeError::CrossbeamSendFailed)?;
+        // Counted only once the event is in the channel: a handle that sees delivery n can
+        // receive event n.
+        self.bump_delivery_epoch(id)?;
         Ok(DeliveryKind::Crossbeam)
     }
 
@@ -1575,101 +1553,91 @@ mod tests {
 }
 
 // ===========================================================================
-// THE LOOM GATE — concurrent memory-ordering verification of the wake/epoch
-// protocol. Miri (scripts/miri_gate.sh) checks single-threaded UB; loom
-// checks that the Acquire/Release/AcqRel discipline on the REAL
-// `CacheLineAtomicU64` is correct under EVERY thread interleaving and
-// weak-memory reordering. Run: scripts/loom_gate.sh (RUSTFLAGS="--cfg loom").
+// THE LOOM GATE — loom checks the wake/epoch publication under every thread interleaving and
+// weak-memory reordering. Miri (scripts/miri_gate.sh) checks single-threaded UB and the
+// real-thread handle tests. Run: scripts/loom_gate.sh (RUSTFLAGS="--cfg loom").
 //
-// These drive the real `CacheLineAtomicU64` type with the exact operations and
-// orderings the runtime uses on the wake path:
-//   waker:  last_key.store(K, Release);  wake_epoch.fetch_add(1, AcqRel)   (lib.rs ~1068)
-//   reader: e = wake_epoch.load(Acquire); key = last_key.load(Acquire)     (observer_epoch / observer_last_key)
+// These drive the real `ObserverCells` functions the runtime and `ObserverHandle` use:
+//   runtime: publish_wake (key Release, then epoch Release), bump_delivery, mark_removed
+//   handle:  observe (epoch Acquire, then key Acquire), delivery_epoch, state
+// tests/loom_atomic_wake_tests.rs drives the whole runtime against a handle on another thread.
 // ===========================================================================
 #[cfg(all(test, loom))]
 mod loom_wake_tests {
-    use super::CacheLineAtomicU64;
-    use crate::sync::atomic::Ordering;
-    use crate::sync::{thread, Arc};
+    use crate::cells::ObserverCells;
+    use crate::sync::thread;
+    use crate::{ObserverState, WakeKey64, WakeProfileCode, WakeReasonCode};
 
-    const WAKE_KEY: u64 = 0xA5A5_1234;
+    fn key(n: u8) -> WakeKey64 {
+        WakeKey64::typed(WakeReasonCode::Manual, WakeProfileCode::AtomicEpoch, 0, 0b1_u16, 0, u16::from(n)).unwrap()
+    }
 
-    /// MESSAGE PASSING: a reader that observes the bumped wake epoch MUST also
-    /// observe the published key. If the Release/Acquire pairing were wrong
-    /// (e.g. a Relaxed slipped in), loom would find an interleaving where the
-    /// epoch is seen fresh but the key is still stale — a torn/lost wake.
+    /// A reader that sees epoch n sees the key of wake n or a later one: never a stale key, never
+    /// a key with no wake behind it.
     #[test]
-    fn a_reader_that_sees_the_epoch_sees_the_key() {
+    fn a_reader_sees_the_key_of_its_epoch_or_a_later_one() {
         loom::model(|| {
-            let wake_epoch = Arc::new(CacheLineAtomicU64::new(0));
-            let last_key = Arc::new(CacheLineAtomicU64::new(0));
+            let cells = ObserverCells::new(true);
+            let writer = {
+                let cells = cells.clone();
+                thread::spawn(move || {
+                    cells.publish_wake(key(1));
+                    cells.publish_wake(key(2));
+                })
+            };
 
-            let (we, lk) = (wake_epoch.clone(), last_key.clone());
-            let waker = thread::spawn(move || {
-                lk.0.store(WAKE_KEY, Ordering::Release);
-                we.0.fetch_add(1, Ordering::AcqRel);
-            });
-
-            // Reader: exactly the runtime's observe order — epoch first, then key.
-            if wake_epoch.0.load(Ordering::Acquire) >= 1 {
-                assert_eq!(
-                    last_key.0.load(Ordering::Acquire),
-                    WAKE_KEY,
-                    "observed a bumped epoch with a stale key — the wake was torn/lost"
-                );
+            let seen = cells.observe();
+            match seen.epoch {
+                0 => assert_eq!(seen.key, None),
+                1 => assert!(seen.key == Some(key(1)) || seen.key == Some(key(2)), "{seen:?}"),
+                2 => assert_eq!(seen.key, Some(key(2)), "epoch 2 with a stale key"),
+                n => panic!("epoch {n} after two wakes"),
             }
-            waker.join().unwrap();
+            writer.join().unwrap();
+            assert_eq!(cells.observe().epoch, 2);
         });
     }
 
-    /// NO LOST WAKE: two concurrent wakers each fetch_add the epoch; under
-    /// AcqRel neither increment may be lost, whatever the interleaving.
+    /// A reader never sees more deliveries than wakes.
     #[test]
-    fn concurrent_wakes_never_lose_an_increment() {
+    fn delivery_never_runs_ahead_of_wakes() {
         loom::model(|| {
-            let wake_epoch = Arc::new(CacheLineAtomicU64::new(0));
-            let a = wake_epoch.clone();
-            let b = wake_epoch.clone();
-            let ta = thread::spawn(move || {
-                a.0.fetch_add(1, Ordering::AcqRel);
-            });
-            let tb = thread::spawn(move || {
-                b.0.fetch_add(1, Ordering::AcqRel);
-            });
-            ta.join().unwrap();
-            tb.join().unwrap();
-            assert_eq!(
-                wake_epoch.0.load(Ordering::Acquire),
-                2,
-                "an increment was lost — a wake was dropped"
-            );
+            let cells = ObserverCells::new(true);
+            let writer = {
+                let cells = cells.clone();
+                thread::spawn(move || {
+                    cells.publish_wake(key(1));
+                    cells.bump_delivery();
+                    cells.publish_wake(key(2));
+                    cells.bump_delivery();
+                })
+            };
+
+            let delivered = cells.delivery_epoch();
+            let woken = cells.wake_epoch();
+            assert!(woken >= delivered, "{delivered} deliveries but {woken} wakes");
+            writer.join().unwrap();
         });
     }
 
-    /// DELIVERY ORDERING: wake then delivery epochs advance independently; a
-    /// reader observing delivery >= wake must never see delivery ahead of a
-    /// wake it hasn't observed (the runtime's back-pressure invariant).
+    /// Once a reader sees the observer removed, it sees every wake published before the removal.
     #[test]
-    fn delivery_never_races_ahead_of_an_unobserved_wake() {
+    fn removal_is_seen_after_the_wakes_before_it() {
         loom::model(|| {
-            let wake_epoch = Arc::new(CacheLineAtomicU64::new(0));
-            let delivery_epoch = Arc::new(CacheLineAtomicU64::new(0));
+            let cells = ObserverCells::new(true);
+            let writer = {
+                let cells = cells.clone();
+                thread::spawn(move || {
+                    cells.publish_wake(key(1));
+                    cells.mark_removed();
+                })
+            };
 
-            let (we, de) = (wake_epoch.clone(), delivery_epoch.clone());
-            let worker = thread::spawn(move || {
-                we.0.fetch_add(1, Ordering::AcqRel); // wake published
-                de.0.fetch_add(1, Ordering::AcqRel); // then delivered
-            });
-
-            let delivered = delivery_epoch.0.load(Ordering::Acquire);
-            if delivered >= 1 {
-                // If we saw a delivery, the wake that caused it is at least as advanced.
-                assert!(
-                    wake_epoch.0.load(Ordering::Acquire) >= delivered,
-                    "delivery epoch ran ahead of the wake epoch — inverted ordering"
-                );
+            if cells.state() == ObserverState::Removed {
+                assert_eq!(cells.observe().epoch, 1);
+                assert_eq!(cells.observe().key, Some(key(1)));
             }
-            worker.join().unwrap();
+            writer.join().unwrap();
         });
     }
 }

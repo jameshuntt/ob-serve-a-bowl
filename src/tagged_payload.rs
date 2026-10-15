@@ -11,15 +11,13 @@
 
 use core::marker::PhantomData;
 
-use big_bad_bool::PackedWord;
 use petr_collections::{EncodedArenaHandle, KeyedArena, KeyedArenaError, KeyedArenaHandle};
 use petr_core::{Key, ProphecyBits, SelectorWord, TagError};
 
 use crate::{
-    ObservableWakeRuntime, ObserverId, ObserverState, TargetTaskId, WakeDecodeError, WakeKey64,
+    ObservableWakeRuntime, ObserverId, TargetTaskId, WakeDecodeError, WakeKey64,
     WakeProfileCode, WakeReasonCode,
 };
-use std::sync::atomic::Ordering;
 
 /// Opaque, encoded handle to a payload stored in a [`TaggedPayloadArena`].
 ///
@@ -520,9 +518,6 @@ impl ObservableWakeRuntime {
                 continue;
             };
 
-            if entry.state.0.load(Ordering::Acquire) != ObserverState::Active as u64 {
-                continue;
-            }
 
             if !entry.config.matches(envelope.key) {
                 continue;
@@ -539,13 +534,7 @@ impl ObservableWakeRuntime {
             };
 
             let profile = entry.config.profile;
-            // Publish the key before the epoch bump so external Acquire readers
-            // that notice the new epoch can then read the key that caused it.
-            entry
-                .last_key
-                .0
-                .store(envelope.key.raw_storage(), Ordering::Release);
-            let epoch = entry.wake_epoch.0.fetch_add(1, Ordering::AcqRel) + 1;
+            let epoch = entry.cells.publish_wake(envelope.key);
 
             let event = TaggedWakeEvent {
                 observer_id: entry.id(slot as u32),
