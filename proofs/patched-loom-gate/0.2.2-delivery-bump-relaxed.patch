@@ -1,0 +1,13 @@
+diff --git a/src/cells.rs b/src/cells.rs
+index 15cf619..6e375b3 100644
+--- a/src/cells.rs
++++ b/src/cells.rs
+@@ -70,7 +70,7 @@ impl ObserverCells {
+     /// for the same wake, so a reader never sees more deliveries than wakes.
+     #[inline]
+     pub(crate) fn bump_delivery(&self) -> u64 {
+-        self.delivery_epoch.0.fetch_add(1, Ordering::Release) + 1
++        self.delivery_epoch.0.fetch_add(1, Ordering::Relaxed) + 1
+     }
+ 
+     /// Mark the observer removed; handles see it as removed from then on.

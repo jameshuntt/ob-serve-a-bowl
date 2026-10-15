@@ -1,0 +1,24 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index 0c5cfbe..7e314b7 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1072,8 +1072,8 @@ impl ObservableWakeRuntime {
+         entry
+             .last_key
+             .0
+-            .store(packet.key.raw_storage(), Ordering::Release);
+-        let epoch = entry.wake_epoch.0.fetch_add(1, Ordering::AcqRel) + 1;
++            .store(packet.key.raw_storage(), Ordering::Relaxed);
++        let epoch = entry.wake_epoch.0.fetch_add(1, Ordering::Relaxed) + 1;
+ 
+         Ok(WakeEvent {
+             observer_id: entry.id(slot),
+@@ -1112,7 +1112,7 @@ impl ObservableWakeRuntime {
+ 
+     fn bump_delivery_epoch(&self, id: ObserverId) -> Result<u64, WakeError> {
+         let entry = self.get_entry(id)?;
+-        Ok(entry.delivery_epoch.0.fetch_add(1, Ordering::AcqRel) + 1)
++        Ok(entry.delivery_epoch.0.fetch_add(1, Ordering::Relaxed) + 1)
+     }
+ 
+     #[cfg(feature = "crossbeam-wake")]

@@ -1,0 +1,12 @@
+[package]
+name = "protocol-wrong-type"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+ob-serve-a-bowl = { version = "=0.1.0", features = ["protocol"] }
+waker_protocol = "=0.2.0"
+waker_tables = "=0.1.4"
+
+[workspace]

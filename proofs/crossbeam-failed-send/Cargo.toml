@@ -1,0 +1,12 @@
+[package]
+name = "crossbeam-failed-send"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+ob-serve-a-bowl-0-1-0 = { package = "ob-serve-a-bowl", version = "=0.1.0", features = ["crossbeam-wake"] }
+ob-serve-a-bowl-0-2-2 = { package = "ob-serve-a-bowl", version = "=0.2.2", features = ["crossbeam-wake"] }
+crossbeam-channel = "0.5"
+
+[workspace]

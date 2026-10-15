@@ -1,0 +1,19 @@
+diff --git a/src/sync.rs b/src/sync.rs
+index 722e7a7..0e53b51 100644
+--- a/src/sync.rs
++++ b/src/sync.rs
+@@ -15,14 +15,12 @@ pub use loom::sync::atomic;
+ pub use std::sync::atomic;
+ 
+ #[cfg(loom)]
+-#[allow(unused_imports)]
+ pub use loom::sync::Arc;
+ #[cfg(not(loom))]
+ #[allow(unused_imports)]
+ pub use std::sync::Arc;
+ 
+ #[cfg(loom)]
+-#[allow(unused_imports)]
+ pub use loom::thread;
+ #[cfg(not(loom))]
+ #[allow(unused_imports)]

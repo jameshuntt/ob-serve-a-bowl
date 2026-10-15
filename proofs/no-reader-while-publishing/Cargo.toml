@@ -1,0 +1,10 @@
+[package]
+name = "no-reader-while-publishing"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+ob-serve-a-bowl = "=0.1.0"
+
+[workspace]

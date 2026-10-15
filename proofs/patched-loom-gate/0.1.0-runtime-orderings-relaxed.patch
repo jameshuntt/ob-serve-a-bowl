@@ -1,0 +1,169 @@
+diff --git a/src/cold.rs b/src/cold.rs
+index ac98a47..fa206ee 100644
+--- a/src/cold.rs
++++ b/src/cold.rs
+@@ -370,7 +370,7 @@ impl<S: ObservableState> ColdObservableRuntime<S> {
+             return Err(WakeError::StaleObserver(id));
+         }
+ 
+-        entry.state.0.store(ObserverState::Removed as u64, Ordering::Release);
++        entry.state.0.store(ObserverState::Removed as u64, Ordering::Relaxed);
+         self.generations[id.slot as usize] = entry.generation.wrapping_add(1);
+         *slot = None;
+         self.free.push(id.slot);
+@@ -380,17 +380,17 @@ impl<S: ObservableState> ColdObservableRuntime<S> {
+ 
+     pub fn cold_observer_epoch(&self, id: ObserverId) -> Result<u64, WakeError> {
+         let entry = self.get_cold_entry(id)?;
+-        Ok(entry.wake_epoch.0.load(Ordering::Acquire))
++        Ok(entry.wake_epoch.0.load(Ordering::Relaxed))
+     }
+ 
+     pub fn cold_observer_delivery_epoch(&self, id: ObserverId) -> Result<u64, WakeError> {
+         let entry = self.get_cold_entry(id)?;
+-        Ok(entry.delivery_epoch.0.load(Ordering::Acquire))
++        Ok(entry.delivery_epoch.0.load(Ordering::Relaxed))
+     }
+ 
+     pub fn cold_observer_last_key(&self, id: ObserverId) -> Result<Option<WakeKey64>, WakeError> {
+         let entry = self.get_cold_entry(id)?;
+-        let raw = entry.last_key.0.load(Ordering::Acquire);
++        let raw = entry.last_key.0.load(Ordering::Relaxed);
+         if raw == 0 {
+             return Ok(None);
+         }
+@@ -716,12 +716,12 @@ fn make_cold_delivery<S>(
+     let reason = packet.key.reason_code()?;
+     let profile = entry.config.profile;
+ 
+-    entry.last_key.0.store(packet.key.raw_storage(), Ordering::Release);
+-    let epoch = entry.wake_epoch.0.fetch_add(1, Ordering::AcqRel) + 1;
++    entry.last_key.0.store(packet.key.raw_storage(), Ordering::Relaxed);
++    let epoch = entry.wake_epoch.0.fetch_add(1, Ordering::Relaxed) + 1;
+ 
+     match profile {
+         WakeProfileCode::InlineQueue => {
+-            entry.delivery_epoch.0.fetch_add(1, Ordering::AcqRel);
++            entry.delivery_epoch.0.fetch_add(1, Ordering::Relaxed);
+             Ok(ColdDelivery::Inline(WakeEvent {
+                 observer_id: entry.id(slot),
+                 target: entry.config.target,
+@@ -733,11 +733,11 @@ fn make_cold_delivery<S>(
+             }))
+         }
+         WakeProfileCode::AtomicEpoch => {
+-            entry.delivery_epoch.0.fetch_add(1, Ordering::AcqRel);
++            entry.delivery_epoch.0.fetch_add(1, Ordering::Relaxed);
+             Ok(ColdDelivery::Atomic)
+         }
+         WakeProfileCode::ConditionCache => {
+-            entry.delivery_epoch.0.fetch_add(1, Ordering::AcqRel);
++            entry.delivery_epoch.0.fetch_add(1, Ordering::Relaxed);
+             Ok(ColdDelivery::Condition(WakeEvent {
+                 observer_id: entry.id(slot),
+                 target: entry.config.target,
+@@ -749,7 +749,7 @@ fn make_cold_delivery<S>(
+             }))
+         }
+         WakeProfileCode::Manual => {
+-            entry.delivery_epoch.0.fetch_add(1, Ordering::AcqRel);
++            entry.delivery_epoch.0.fetch_add(1, Ordering::Relaxed);
+             Ok(ColdDelivery::Manual)
+         }
+         WakeProfileCode::CrossbeamQueue => Ok(ColdDelivery::Error(
+diff --git a/src/lib.rs b/src/lib.rs
+index 38eaea8..6cf3a0d 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -846,7 +846,7 @@ impl ObservableWakeRuntime {
+             return Err(WakeError::StaleObserver(id));
+         }
+ 
+-        entry.state.0.store(ObserverState::Removed as u64, Ordering::Release);
++        entry.state.0.store(ObserverState::Removed as u64, Ordering::Relaxed);
+         self.generations[id.slot as usize] = entry.generation.wrapping_add(1);
+         *slot = None;
+         self.free.push(id.slot);
+@@ -856,17 +856,17 @@ impl ObservableWakeRuntime {
+ 
+     pub fn observer_epoch(&self, id: ObserverId) -> Result<u64, WakeError> {
+         let entry = self.get_entry(id)?;
+-        Ok(entry.wake_epoch.0.load(Ordering::Acquire))
++        Ok(entry.wake_epoch.0.load(Ordering::Relaxed))
+     }
+ 
+     pub fn observer_delivery_epoch(&self, id: ObserverId) -> Result<u64, WakeError> {
+         let entry = self.get_entry(id)?;
+-        Ok(entry.delivery_epoch.0.load(Ordering::Acquire))
++        Ok(entry.delivery_epoch.0.load(Ordering::Relaxed))
+     }
+ 
+     pub fn observer_last_key(&self, id: ObserverId) -> Result<Option<WakeKey64>, WakeError> {
+         let entry = self.get_entry(id)?;
+-        let raw = entry.last_key.0.load(Ordering::Acquire);
++        let raw = entry.last_key.0.load(Ordering::Relaxed);
+         if raw == 0 {
+             return Ok(None);
+         }
+@@ -883,7 +883,7 @@ impl ObservableWakeRuntime {
+                 continue;
+             };
+ 
+-            if entry.state.0.load(Ordering::Acquire) != ObserverState::Active as u64 {
++            if entry.state.0.load(Ordering::Relaxed) != ObserverState::Active as u64 {
+                 continue;
+             }
+ 
+@@ -941,7 +941,7 @@ impl ObservableWakeRuntime {
+                     continue;
+                 }
+ 
+-                if entry.state.0.load(Ordering::Acquire) != ObserverState::Active as u64 {
++                if entry.state.0.load(Ordering::Relaxed) != ObserverState::Active as u64 {
+                     continue;
+                 }
+ 
+@@ -1073,8 +1073,8 @@ impl ObservableWakeRuntime {
+         entry
+             .last_key
+             .0
+-            .store(packet.key.raw_storage(), Ordering::Release);
+-        let epoch = entry.wake_epoch.0.fetch_add(1, Ordering::AcqRel) + 1;
++            .store(packet.key.raw_storage(), Ordering::Relaxed);
++        let epoch = entry.wake_epoch.0.fetch_add(1, Ordering::Relaxed) + 1;
+ 
+         Ok(WakeEvent {
+             observer_id: entry.id(slot),
+@@ -1113,7 +1113,7 @@ impl ObservableWakeRuntime {
+ 
+     fn bump_delivery_epoch(&self, id: ObserverId) -> Result<u64, WakeError> {
+         let entry = self.get_entry(id)?;
+-        Ok(entry.delivery_epoch.0.fetch_add(1, Ordering::AcqRel) + 1)
++        Ok(entry.delivery_epoch.0.fetch_add(1, Ordering::Relaxed) + 1)
+     }
+ 
+     #[cfg(feature = "crossbeam-wake")]
+diff --git a/src/tagged_payload.rs b/src/tagged_payload.rs
+index 7280aca..a80be7a 100644
+--- a/src/tagged_payload.rs
++++ b/src/tagged_payload.rs
+@@ -520,7 +520,7 @@ impl ObservableWakeRuntime {
+                 continue;
+             };
+ 
+-            if entry.state.0.load(Ordering::Acquire) != ObserverState::Active as u64 {
++            if entry.state.0.load(Ordering::Relaxed) != ObserverState::Active as u64 {
+                 continue;
+             }
+ 
+@@ -544,8 +544,8 @@ impl ObservableWakeRuntime {
+             entry
+                 .last_key
+                 .0
+-                .store(envelope.key.raw_storage(), Ordering::Release);
+-            let epoch = entry.wake_epoch.0.fetch_add(1, Ordering::AcqRel) + 1;
++                .store(envelope.key.raw_storage(), Ordering::Relaxed);
++            let epoch = entry.wake_epoch.0.fetch_add(1, Ordering::Relaxed) + 1;
+ 
+             let event = TaggedWakeEvent {
+                 observer_id: entry.id(slot as u32),

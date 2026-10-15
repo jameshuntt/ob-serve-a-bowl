@@ -1,0 +1,13 @@
+diff --git a/src/cells.rs b/src/cells.rs
+index 15cf619..2255b46 100644
+--- a/src/cells.rs
++++ b/src/cells.rs
+@@ -63,7 +63,7 @@ impl ObserverCells {
+     #[inline]
+     pub(crate) fn publish_wake(&self, key: WakeKey64) -> u64 {
+         self.last_key.0.store(key.raw_storage(), Ordering::Release);
+-        self.wake_epoch.0.fetch_add(1, Ordering::Release) + 1
++        self.wake_epoch.0.fetch_add(1, Ordering::Relaxed) + 1
+     }
+ 
+     /// Record a delivery of the latest wake; the new delivery epoch. Always after `publish_wake`

@@ -8,6 +8,7 @@ description = "Observable wake runtime: a bit-packed wake key for hot-path routi
 authors = ["James Hunt"]
 repository = "https://github.com/jameshuntt/ob-serve-a-bowl"
 readme = "README.md"
+exclude = ["/proofs"]
 keywords = ["observable", "wake", "scheduler", "event-log", "runtime"]
 categories = ["concurrency", "asynchronous"]
 
