@@ -5,5 +5,5 @@
 # and are not meaningful under the loom cfg.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-RUSTFLAGS="--cfg loom" cargo test --all-features --lib loom_wake_tests
-RUSTFLAGS="--cfg loom" cargo test --all-features --test loom_atomic_wake_tests
+RUSTFLAGS="--cfg loom -D warnings" cargo test --all-features --locked --lib loom_wake_tests
+RUSTFLAGS="--cfg loom -D warnings" cargo test --all-features --locked --test loom_atomic_wake_tests

@@ -1584,9 +1584,9 @@ mod tests {
 // These drive the real `CacheLineAtomicU64` type with the exact operations and
 // orderings the runtime uses on the wake path:
 //   waker:  last_key.store(K, Release);  wake_epoch.fetch_add(1, AcqRel)   (lib.rs ~1068)
-//   reader: e = wake_epoch.load(Acquire); key = last_key.load(Acquire)     (observer_epoch / last_wake_key)
+//   reader: e = wake_epoch.load(Acquire); key = last_key.load(Acquire)     (observer_epoch / observer_last_key)
 // ===========================================================================
-#[cfg(loom)]
+#[cfg(all(test, loom))]
 mod loom_wake_tests {
     use super::CacheLineAtomicU64;
     use crate::sync::atomic::Ordering;

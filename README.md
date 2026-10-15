@@ -18,7 +18,7 @@ runtime uses. See `scripts/loom_gate.sh`.
 
 ```toml
 [dependencies]
-ob-serve-a-bowl = "0.1"
+ob-serve-a-bowl = "0.2"
 ```
 
 ## Features
@@ -57,7 +57,7 @@ cargo run --example server_event_observable --features protocol,serialization,ta
 ```bash
 cargo test --all-features     # 86 tests: 23 unit, 63 integration
 scripts/loom_gate.sh          # 5 loom tests over the wake/epoch atomics
-MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-disable-isolation" cargo +nightly miri test --all-features  # the 86 tests under Miri
+scripts/miri_gate.sh          # the 86 tests and every example under Miri
 cargo bench                   # criterion benches for the hot path
 ```
 

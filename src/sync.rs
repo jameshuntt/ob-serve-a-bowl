@@ -15,12 +15,14 @@ pub use loom::sync::atomic;
 pub use std::sync::atomic;
 
 #[cfg(loom)]
+#[allow(unused_imports)]
 pub use loom::sync::Arc;
 #[cfg(not(loom))]
 #[allow(unused_imports)]
 pub use std::sync::Arc;
 
 #[cfg(loom)]
+#[allow(unused_imports)]
 pub use loom::thread;
 #[cfg(not(loom))]
 #[allow(unused_imports)]
