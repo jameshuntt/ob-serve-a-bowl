@@ -2,8 +2,8 @@
 //!
 //! This module keeps the observable wake plane separate from the payload plane:
 //!
-//! - [`WakeKey64`](crate::WakeKey64) still decides which observers match,
-//! - [`WakeProfileCode`](crate::WakeProfileCode) still decides the delivery mode,
+//! - [`WakeKey64`] still decides which observers match,
+//! - [`WakeProfileCode`] still decides the delivery mode,
 //! - [`TaggedPayloadRef`] is only resolved after an observer has already matched.
 //!
 //! The handle is intentionally encoded/opaque. It is not a raw pointer and it

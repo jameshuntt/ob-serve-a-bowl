@@ -1,6 +1,6 @@
 [package]
 name = "ob-serve-a-bowl"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
@@ -34,6 +34,10 @@ thiserror = { version = "1", optional = true }
 # under `--cfg loom`; the normal build and tests use std atomics.
 [target.'cfg(loom)'.dependencies]
 loom = "0.7"
+
+[lints.rust]
+# `--cfg loom` is how the loom tests run (scripts/loom_gate.sh).
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

@@ -119,6 +119,7 @@ impl WakeEvent {
 }
 
 /// Result of converting or sending a batch of wake events into protocol wakes.
+#[derive(Default)]
 pub struct ProtocolBridgeReport {
     pub scanned: usize,
     pub converted: usize,
@@ -128,18 +129,6 @@ pub struct ProtocolBridgeReport {
     pub messages: Vec<waker_protocol::SchedulerMsg>,
 }
 
-impl Default for ProtocolBridgeReport {
-    fn default() -> Self {
-        Self {
-            scanned: 0,
-            converted: 0,
-            sent: 0,
-            skipped: 0,
-            errors: Vec::new(),
-            messages: Vec::new(),
-        }
-    }
-}
 
 impl fmt::Debug for ProtocolBridgeReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

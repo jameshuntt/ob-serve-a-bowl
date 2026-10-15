@@ -13,6 +13,7 @@ struct ServiceState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::enum_variant_names)] // `Set` is each event's verb
 enum ServiceEvent {
     SetQueue(u32),
     SetHealth(bool),

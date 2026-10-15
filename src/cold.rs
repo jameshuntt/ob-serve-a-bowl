@@ -1,7 +1,7 @@
 //! Stateful cold-observable layer.
 //!
-//! The base [`ObservableWakeRuntime`](crate::ObservableWakeRuntime) is the hot
-//! binary wake router: it matches a [`WakeKey64`](crate::WakeKey64) and delivers
+//! The base [`ObservableWakeRuntime`] is the hot
+//! binary wake router: it matches a [`WakeKey64`] and delivers
 //! a wake immediately. This module adds the missing cold-observable piece:
 //! materialized state plus predicates that wake only when cached state crosses a
 //! condition.
@@ -13,7 +13,7 @@
 //! ```
 //!
 //! Payload resolution stays outside this layer. Callers can use plain events,
-//! [`PayloadRef`](crate::PayloadRef), or the optional tagged-payload feature to
+//! [`PayloadRef`], or the optional tagged-payload feature to
 //! build the state event before publishing.
 
 use big_bad_bool::PackedWord;
@@ -475,7 +475,7 @@ impl<S: ObservableState> ColdObservableRuntime<S> {
     ///
     /// The hot half delegates to [`ObservableWakeRuntime::publish_auto`]. The
     /// cold half chooses scan versus indexed predicate evaluation using the hot
-    /// runtime's [`DispatchPolicy`], so callers can tune one policy for the whole
+    /// runtime's [`DispatchPolicy`](crate::DispatchPolicy), so callers can tune one policy for the whole
     /// observable runtime.
     pub fn publish_stateful_auto(
         &mut self,
@@ -612,8 +612,7 @@ impl<S: ObservableState> ColdObservableRuntime<S> {
         self.index.collect_candidates(packet.key, &mut self.index_scratch);
         let candidates = std::mem::take(&mut self.index_scratch);
 
-        for index in 0..candidates.len() {
-            let id = candidates[index];
+        for &id in &candidates {
             report.cold_scanned += 1;
 
             let delivery = {

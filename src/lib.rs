@@ -928,8 +928,7 @@ impl ObservableWakeRuntime {
         self.index.collect_candidates(packet.key, &mut self.index_scratch);
 
         let candidates = std::mem::take(&mut self.index_scratch);
-        for index in 0..candidates.len() {
-            let id = candidates[index];
+        for &id in &candidates {
             report.scanned += 1;
 
             let event = {
