@@ -152,12 +152,17 @@ fn cold_inline_events_convert_to_protocol_wake_messages() {
 
 struct NoopEnvelope;
 
-impl Envelope for NoopEnvelope {
+// SAFETY: dispatch never reads `target`.
+unsafe impl Envelope for NoopEnvelope {
     fn kind(&self) -> &'static str {
         "noop"
     }
 
-    fn dispatch(self: Box<Self>, _target: *mut ()) -> Result<(), String> {
+    fn target_type(&self) -> std::any::TypeId {
+        std::any::TypeId::of::<()>()
+    }
+
+    unsafe fn dispatch(self: Box<Self>, _target: *mut ()) -> Result<(), String> {
         Ok(())
     }
 }

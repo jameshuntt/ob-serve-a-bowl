@@ -60,6 +60,11 @@ scripts/loom_gate.sh          # 5 loom tests over the wake/epoch atomics
 cargo bench                   # criterion benches for the hot path
 ```
 
+## 0.2.0
+
+The `protocol` feature uses `waker_protocol` 0.3, whose messages are checked against the task type
+they are for. Its `TaskId`, `WakeReason` and `SchedulerMsg` are 0.3's types now. Minimum Rust 1.88.
+
 ## License
 
 MIT or Apache-2.0, at your option.
