@@ -1,6 +1,6 @@
 [package]
 name = "ob-serve-a-bowl"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Observable wake runtime: a bit-packed wake key for hot-path routing, cold observers declared as field masks, profile-selected wake delivery, and a replayable event log."

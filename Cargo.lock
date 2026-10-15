@@ -425,7 +425,7 @@ dependencies = [
 
 [[package]]
 name = "ob-serve-a-bowl"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "big-bad-bool",
  "big-bad-bool-interact",
