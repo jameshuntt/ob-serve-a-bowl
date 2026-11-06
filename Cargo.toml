@@ -1,6 +1,6 @@
 [package]
 name = "ob-serve-a-bowl"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
@@ -21,7 +21,11 @@ tagged-payloads = ["dep:petr-core", "dep:petr-collections", "dep:thiserror"]
 loom-tests = []
 
 [dependencies]
-big-bad-bool = "0.1"
+# `#[bitpack]` expands to `::big_bad_bool::<item>` paths, and every one of those items is in
+# big-bad-bool-core. Naming core `big_bad_bool` here satisfies those paths without depending on the
+# big-bad-bool facade, which itself depends on this crate through big-bad-bool-program.
+big_bad_bool = { package = "big-bad-bool-core", version = "0.1" }
+big-bad-bool-derive = "0.1"
 big-bad-bool-interact = "0.1"
 crossbeam-channel = { version = "0.5", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }

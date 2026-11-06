@@ -9,7 +9,8 @@
 //! Crossbeam is intentionally a feature-gated wake profile (`crossbeam-wake`),
 //! not the identity of the protocol. The protocol stays backend-agnostic.
 
-use big_bad_bool::{bitpack, BitpackError};
+use big_bad_bool::BitpackError;
+use big_bad_bool_derive::bitpack;
 use big_bad_bool_interact::FieldMatcher;
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;

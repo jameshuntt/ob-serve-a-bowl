@@ -66,6 +66,12 @@ scripts/miri_gate.sh          # the 98 tests and every example under Miri
 cargo bench                   # criterion benches for the hot path
 ```
 
+## 0.2.3
+
+Depends on `big-bad-bool-core` and `big-bad-bool-derive` instead of the `big-bad-bool` facade.
+The facade can now depend on this crate (through `big-bad-bool-program`) without a cycle. The
+public API is unchanged.
+
 ## 0.2.2
 
 - `ObserverHandle`: read an observer's wake count, delivery count, latest key and state from any
